@@ -80,7 +80,7 @@ func (a *Agent) Run() {
 
 						response, err := toolDef.Fn(json.RawMessage([]byte(variant.JSON.Input.Raw())))
 						if err != nil {
-							panic("Tool use error.")
+							response = err
 						}
 
 						b, err := json.Marshal(response)
@@ -187,9 +187,41 @@ var listFilesTool = ToolDef{
 	},
 }
 
+var readFileTool = ToolDef{
+	Description: "Accepts a file path and returns the contents of that file.",
+	InputSchema: anthropic.ToolInputSchemaParam{
+		Properties: map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "Directory path to list items within.",
+			},
+		},
+		Required: []string{"path"},
+	},
+
+	Fn: func(raw json.RawMessage) (any, error) {
+		var input struct {
+			Path string `json:"path"`
+		}
+
+		err := json.Unmarshal(raw, &input)
+		if err != nil {
+			panic(err)
+		}
+
+		content, err := os.ReadFile(input.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		return string(content), nil
+	},
+}
+
 var toolDefs = map[string]ToolDef{
 	"get_coordinates": getCoordinatesTool,
 	"list_file_tool":  listFilesTool,
+	"read_file_tool":  readFileTool,
 }
 
 func toToolParams(toolDefs map[string]ToolDef) []anthropic.ToolParam {
