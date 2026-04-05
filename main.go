@@ -10,25 +10,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-var GetCoordinatesInputSchema = anthropic.ToolInputSchemaParam{
-	Type: "object",
-	Properties: map[string]interface{}{
-		"location": map[string]interface{}{
-			"type":        "string",
-			"description": "The name of the place or address to get coordinates for.",
-		},
-	},
-	Required: []string{"location"},
-}
-
-var toolParams = []anthropic.ToolParam{
-	{
-		Name:        "get_coordinates",
-		Description: anthropic.String("Accepts a place as an address, then returns the latitude and longitude coordinates."),
-		InputSchema: GetCoordinatesInputSchema,
-	},
-}
-
 func main() {
 	client := anthropic.NewClient()
 
@@ -40,7 +21,8 @@ func main() {
 		return "", false
 	}
 
-	var tools = make([]anthropic.ToolUnionParam, len(toolParams))
+	toolParams := toToolParams(toolDefs)
+	tools := make([]anthropic.ToolUnionParam, len(toolParams))
 	for i, toolParam := range toolParams {
 		tools[i] = anthropic.ToolUnionParam{OfTool: &toolParam}
 	}
@@ -90,20 +72,14 @@ func (a *Agent) Run() {
 					switch variant := block.AsAny().(type) {
 					case anthropic.ToolUseBlock:
 						print("[user (" + block.Name + ")]: ")
+						toolDef, ok := toolDefs[block.Name]
+						if !ok {
+							panic(fmt.Sprintf("Tool is not in toolDefs map: %s", block.Name))
+						}
 
-						var response interface{}
-						switch block.Name {
-						case "get_coordinates":
-							var input struct {
-								Location string `json:"location"`
-							}
-
-							err := json.Unmarshal([]byte(variant.JSON.Input.Raw()), &input)
-							if err != nil {
-								panic(err)
-							}
-
-							response = GetCoordinates(input.Location)
+						response, err := toolDef.Fn(json.RawMessage([]byte(variant.JSON.Input.Raw())))
+						if err != nil {
+							panic("Tool use error.")
 						}
 
 						b, err := json.Marshal(response)
@@ -129,10 +105,6 @@ func (a *Agent) Run() {
 	}
 }
 
-func GetCoordinates(s string) interface{} {
-	return map[string]int{"lat": 1, "long": 2}
-}
-
 func (a *Agent) runInference(messages []anthropic.MessageParam) *anthropic.Message {
 	message, err := a.client.Messages.New(context.TODO(), anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeOpus4_6,
@@ -144,4 +116,52 @@ func (a *Agent) runInference(messages []anthropic.MessageParam) *anthropic.Messa
 		panic(err)
 	}
 	return message
+}
+
+type ToolDef struct {
+	Description string
+	InputSchema anthropic.ToolInputSchemaParam
+	Fn          func(input json.RawMessage) (any, error)
+}
+
+var getCoordinatesTool = ToolDef{
+	Description: "Accepts a place as an address, then returns the latitude and longitude coordinates.",
+	InputSchema: anthropic.ToolInputSchemaParam{
+		Properties: map[string]interface{}{
+			"location": map[string]interface{}{
+				"type":        "string",
+				"description": "The name of the place or address to get coordinates for.",
+			},
+		},
+		Required: []string{"location"},
+	},
+
+	Fn: func(raw json.RawMessage) (any, error) {
+		var input struct {
+			Location string `json:"location"`
+		}
+
+		err := json.Unmarshal(raw, &input)
+		if err != nil {
+			panic(err)
+		}
+
+		return map[string]int{"lat": 1, "long": 2}, nil
+	},
+}
+
+var toolDefs = map[string]ToolDef{
+	"get_coordinates": getCoordinatesTool,
+}
+
+func toToolParams(toolDefs map[string]ToolDef) []anthropic.ToolParam {
+	var tools []anthropic.ToolParam
+	for toolName, toolDef := range toolDefs {
+		tools = append(tools, anthropic.ToolParam{
+			Name:        toolName,
+			Description: anthropic.String(toolDef.Description),
+			InputSchema: toolDef.InputSchema,
+		})
+	}
+	return tools
 }
