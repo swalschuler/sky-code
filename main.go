@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -150,8 +151,45 @@ var getCoordinatesTool = ToolDef{
 	},
 }
 
+var listFilesTool = ToolDef{
+	Description: "Accepts a directory path and lists all files/directories separated by commas.",
+	InputSchema: anthropic.ToolInputSchemaParam{
+		Properties: map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "Directory path to list items within.",
+			},
+		},
+		Required: []string{"path"},
+	},
+
+	Fn: func(raw json.RawMessage) (any, error) {
+		var input struct {
+			Path string `json:"path"`
+		}
+
+		err := json.Unmarshal(raw, &input)
+		if err != nil {
+			panic(err)
+		}
+
+		entries, err := os.ReadDir(input.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+
+		return strings.Join(names, ","), nil
+	},
+}
+
 var toolDefs = map[string]ToolDef{
 	"get_coordinates": getCoordinatesTool,
+	"list_file_tool":  listFilesTool,
 }
 
 func toToolParams(toolDefs map[string]ToolDef) []anthropic.ToolParam {
