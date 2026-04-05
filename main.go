@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -78,9 +80,10 @@ func (a *Agent) Run() {
 							panic(fmt.Sprintf("Tool is not in toolDefs map: %s", block.Name))
 						}
 
-						response, err := toolDef.Fn(json.RawMessage([]byte(variant.JSON.Input.Raw())))
+						response, err := toolDef.Fn(json.RawMessage([]byte(variant.JSON.Input.Raw())), a.getInput)
 						if err != nil {
 							response = err
+							log.Println(err)
 						}
 
 						b, err := json.Marshal(response)
@@ -122,7 +125,7 @@ func (a *Agent) runInference(messages []anthropic.MessageParam) *anthropic.Messa
 type ToolDef struct {
 	Description string
 	InputSchema anthropic.ToolInputSchemaParam
-	Fn          func(input json.RawMessage) (any, error)
+	Fn          func(input json.RawMessage, getInput func() (string, bool)) (any, error)
 }
 
 var getCoordinatesTool = ToolDef{
@@ -137,7 +140,7 @@ var getCoordinatesTool = ToolDef{
 		Required: []string{"location"},
 	},
 
-	Fn: func(raw json.RawMessage) (any, error) {
+	Fn: func(raw json.RawMessage, getInput func() (string, bool)) (any, error) {
 		var input struct {
 			Location string `json:"location"`
 		}
@@ -163,7 +166,7 @@ var listFilesTool = ToolDef{
 		Required: []string{"path"},
 	},
 
-	Fn: func(raw json.RawMessage) (any, error) {
+	Fn: func(raw json.RawMessage, getInput func() (string, bool)) (any, error) {
 		var input struct {
 			Path string `json:"path"`
 		}
@@ -199,7 +202,7 @@ var readFileTool = ToolDef{
 		Required: []string{"path"},
 	},
 
-	Fn: func(raw json.RawMessage) (any, error) {
+	Fn: func(raw json.RawMessage, getInput func() (string, bool)) (any, error) {
 		var input struct {
 			Path string `json:"path"`
 		}
@@ -218,10 +221,49 @@ var readFileTool = ToolDef{
 	},
 }
 
+var bashTool = ToolDef{
+	Description: "Run a bash command and returns the output.",
+	InputSchema: anthropic.ToolInputSchemaParam{
+		Properties: map[string]interface{}{
+			"command": map[string]interface{}{
+				"type":        "string",
+				"description": "Bash command to run.",
+			},
+		},
+		Required: []string{"command"},
+	},
+
+	Fn: func(raw json.RawMessage, getInput func() (string, bool)) (any, error) {
+		var input struct {
+			Command string `json:"command"`
+		}
+
+		err := json.Unmarshal(raw, &input)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("sky-code would like to run command: %s\nApprove? (y/n)", input.Command)
+		userInput, ok := getInput()
+		if userInput != "y" || !ok {
+			return nil, fmt.Errorf("The user decided not to allow this command to run: %s", input.Command)
+		}
+
+		cmd := exec.Command("bash", "-c", input.Command)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, err
+		}
+
+		return string(out), nil
+	},
+}
+
 var toolDefs = map[string]ToolDef{
 	"get_coordinates": getCoordinatesTool,
 	"list_file_tool":  listFilesTool,
 	"read_file_tool":  readFileTool,
+	"bash_tool":       bashTool,
 }
 
 func toToolParams(toolDefs map[string]ToolDef) []anthropic.ToolParam {
